@@ -18,6 +18,7 @@ The product spec lives in [`docs/PRD.md`](docs/PRD.md); requirement IDs like
 ```bash
 npm install
 npm run dev          # http://localhost:3000
+npm test             # unit tests
 ```
 
 It runs with **no API keys at all**. Without them the app is in *demo mode*:
@@ -59,7 +60,11 @@ src/
   lib/
     geo.ts                       haversine, great-circle midpoint, radius, coarsening
     places.ts                    Google Places + geocoding, and the demo fixtures
-    store.ts                     sessions, seats, tokens, 24h expiry
+    store/                       sessions, seats, tokens, 24h expiry
+      index.ts                   picks the backend from the environment
+      kv-store.ts                Redis: atomic seat claims, TTL expiry
+      file-store.ts              JSON file, local development only
+    maps-loader.ts               Google Maps bootstrap (callback + importLibrary)
     session-view.ts              assembles what each participant is allowed to see
     labels.ts                    who "you" and "them" refer to, per seat
   components/
@@ -69,10 +74,13 @@ src/
     PlaceList.tsx                ranked list with the per-person distance split
 ```
 
-**Sessions** are held in memory and mirrored to `data/sessions.json`. That is
-deliberate for V1 — sessions are tiny and last 24 hours — but it assumes a
-single server process. Swap `src/lib/store.ts` for Redis or Postgres before
-running more than one.
+**Sessions** use whichever backend is configured. With Redis credentials
+present (`KV_REST_API_*` or `UPSTASH_REDIS_REST_*`) it uses Redis, where seats
+are claimed with `SET NX` so two people opening the link at once can never take
+the same seat, and expiry is a native TTL. With no credentials it falls back to
+a JSON file, which keeps local development zero-config but assumes a single
+process — so the app refuses to run on Vercel without Redis rather than failing
+intermittently. See [`DEPLOY.md`](DEPLOY.md).
 
 **Updates** reach the other person by polling every 2.5s, and only while a
 session is still waiting for a location. Results are cached per session, keyed
@@ -81,6 +89,12 @@ by both origins, so polling never re-bills a Places search.
 **Privacy.** Coordinates are rounded to ~100m before they are stored, each
 person sees the other only as an area label rather than an address, and a
 session and its coordinates are deleted 24 hours after it is created.
+
+## Deploying
+
+See [`DEPLOY.md`](DEPLOY.md). The short version: add Upstash Redis, set the two
+Google keys, add your domain to the browser key's referrer list, and check
+`/api/health` afterwards.
 
 ## Not built yet
 

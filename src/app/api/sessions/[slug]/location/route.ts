@@ -4,7 +4,7 @@ import { seatCookieName } from "@/lib/cookies";
 import { coarsen } from "@/lib/geo";
 import { geocode, reverseGeocode } from "@/lib/places";
 import { buildView, expiredView } from "@/lib/session-view";
-import { store } from "@/lib/store";
+import { getStore, seatFor } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -22,12 +22,14 @@ export async function POST(
   { params }: { params: Promise<{ slug: string }> },
 ) {
   const { slug } = await params;
-  const session = store.get(slug);
+  const store = getStore();
+
+  const session = await store.get(slug);
   if (!session) {
     return NextResponse.json(expiredView(slug), { status: 404 });
   }
 
-  const seat = store.seatFor(session, request.cookies.get(seatCookieName(slug))?.value);
+  const seat = seatFor(session, request.cookies.get(seatCookieName(slug))?.value);
   if (!seat) {
     return NextResponse.json(
       { error: "This session already has two people in it." },
@@ -42,6 +44,8 @@ export async function POST(
     return NextResponse.json({ error: "Expected a JSON body." }, { status: 400 });
   }
 
+  let updated = null;
+
   try {
     if (typeof body.lat === "number" && typeof body.lng === "number") {
       if (!Number.isFinite(body.lat) || Math.abs(body.lat) > 90) {
@@ -52,7 +56,7 @@ export async function POST(
       }
       // Coarsened before storage — we never hold a precise position (PR-4).
       const point = coarsen({ lat: body.lat, lng: body.lng });
-      store.setLocation(session, seat, point, await reverseGeocode(point));
+      updated = await store.setLocation(slug, seat, point, await reverseGeocode(point));
     } else if (typeof body.query === "string" && body.query.trim()) {
       const resolved = await geocode(body.query.trim());
       if (!resolved) {
@@ -62,7 +66,7 @@ export async function POST(
           { status: 422 },
         );
       }
-      store.setLocation(session, seat, coarsen(resolved.location), resolved.label);
+      updated = await store.setLocation(slug, seat, coarsen(resolved.location), resolved.label);
     } else {
       return NextResponse.json(
         { error: "Send either an address or a latitude and longitude." },
@@ -77,5 +81,9 @@ export async function POST(
     );
   }
 
-  return NextResponse.json(await buildView(session, seat));
+  if (!updated) {
+    return NextResponse.json(expiredView(slug), { status: 404 });
+  }
+
+  return NextResponse.json(await buildView(updated, seat));
 }

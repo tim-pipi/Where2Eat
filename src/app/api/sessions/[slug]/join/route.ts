@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { seatCookieName, setSeatCookie } from "@/lib/cookies";
 import { buildView, expiredView } from "@/lib/session-view";
-import { store } from "@/lib/store";
+import { getStore, seatFor } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -15,19 +15,26 @@ export async function POST(
   { params }: { params: Promise<{ slug: string }> },
 ) {
   const { slug } = await params;
-  const session = store.get(slug);
+  const store = getStore();
+
+  const session = await store.get(slug);
   if (!session) {
     return NextResponse.json(expiredView(slug), { status: 404 });
   }
 
-  const existing = store.seatFor(session, request.cookies.get(seatCookieName(slug))?.value);
+  const existing = seatFor(session, request.cookies.get(seatCookieName(slug))?.value);
   if (existing) {
     return NextResponse.json(await buildView(session, existing));
   }
 
-  const token = store.join(session);
-  const view = await buildView(session, token ? store.seatFor(session, token) : null);
-  const response = NextResponse.json(view);
-  if (token) setSeatCookie(response, slug, token);
+  const claimed = await store.join(slug);
+  if (!claimed) {
+    return NextResponse.json(await buildView(session, null));
+  }
+
+  const response = NextResponse.json(
+    await buildView(claimed.session, seatFor(claimed.session, claimed.token)),
+  );
+  setSeatCookie(response, slug, claimed.token);
   return response;
 }

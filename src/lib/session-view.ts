@@ -1,27 +1,9 @@
 import { coarsen, haversine, midpoint, searchRadiusFor } from "./geo";
 import { isDemoMode, searchPlaces } from "./places";
-import type { StoredSession } from "./store";
+import { getStore, type StoredSession } from "./store";
 import type { LatLng, Place, PublicParticipant, Seat, SessionView } from "./types";
 
-interface CachedResult {
-  signature: string;
-  places: Place[];
-  notice: string | null;
-  fetchedAt: number;
-}
-
 const RESULT_TTL_MS = 10 * 60 * 1000;
-
-/**
- * Results are cached per session so that polling clients (FR-7.2) do not each
- * re-bill a Places search every two seconds. The signature covers both origins,
- * so changing a location (FR-2.4) invalidates it immediately.
- */
-const globalForCache = globalThis as unknown as {
-  __w2eResults?: Map<string, CachedResult>;
-};
-const resultCache = globalForCache.__w2eResults ?? new Map<string, CachedResult>();
-globalForCache.__w2eResults = resultCache;
 
 export async function buildView(
   session: StoredSession,
@@ -74,10 +56,11 @@ export async function buildView(
   }
 
   const signature = `${a.lat},${a.lng}|${b.lat},${b.lng}`;
-  const cached = resultCache.get(session.slug);
+  const store = getStore();
+  const cached = await store.getResults(session.slug);
   let places: Place[];
 
-  if (cached && cached.signature === signature && Date.now() - cached.fetchedAt < RESULT_TTL_MS) {
+  if (cached && cached.signature === signature) {
     places = cached.places;
     notice = notice ?? cached.notice;
   } else {
@@ -85,12 +68,12 @@ export async function buildView(
       const result = await searchPlaces(centre, searchRadius, a, b);
       places = result.places;
       notice = notice ?? result.notice;
-      resultCache.set(session.slug, {
-        signature,
-        places,
-        notice: result.notice,
-        fetchedAt: Date.now(),
-      });
+      // Cached so that polling clients never re-bill a Places search.
+      await store.setResults(
+        session.slug,
+        { signature, places, notice: result.notice, fetchedAt: Date.now() },
+        RESULT_TTL_MS,
+      );
     } catch (error) {
       // FR-7.3 — serve whatever we have rather than a blank page.
       console.error("[where2eat] place search failed:", error);
