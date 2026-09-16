@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { formatDistance } from "@/lib/geo";
 import { seatLabels } from "@/lib/labels";
@@ -62,6 +62,10 @@ export function SessionClient({ slug }: { slug: string }) {
 
   const onSelect = useCallback((id: string | null) => setSelectedId(id), []);
 
+  // Sits with the other hooks, above the early returns below. Memoised so a
+  // fresh object each render does not rebuild the whole map.
+  const labels = useMemo(() => seatLabels(view?.yourSeat ?? null), [view?.yourSeat]);
+
   if (loadError) {
     return <Shell><div className="card empty"><h2>{loadError}</h2></div></Shell>;
   }
@@ -87,7 +91,6 @@ export function SessionClient({ slug }: { slug: string }) {
   const seatA = view.participants.find((p) => p.seat === "A");
   const seatB = view.participants.find((p) => p.seat === "B");
   const you = view.participants.find((p) => p.seat === view.yourSeat);
-  const labels = seatLabels(view.yourSeat);
   const shareUrl = typeof window !== "undefined" ? window.location.href : "";
 
   async function share() {

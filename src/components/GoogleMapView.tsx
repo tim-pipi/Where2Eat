@@ -3,6 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { SeatLabels } from "@/lib/labels";
+import {
+  loadMapsLibraries,
+  MapsLoadError,
+  type GMap,
+  type GMarker,
+} from "@/lib/maps-loader";
 import type { LatLng, Place } from "@/lib/types";
 
 interface Props {
@@ -14,55 +20,6 @@ interface Props {
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   labels: SeatLabels;
-}
-
-/* Minimal surface of the Maps JS API we actually touch. */
-interface MapsGlobal {
-  maps: {
-    Map: new (el: HTMLElement, options: Record<string, unknown>) => GMap;
-    LatLngBounds: new () => GBounds;
-    Marker: new (options: Record<string, unknown>) => GMarker;
-    Point: new (x: number, y: number) => unknown;
-    importLibrary?: (name: string) => Promise<unknown>;
-  };
-}
-interface GMap {
-  fitBounds: (bounds: GBounds, padding: number) => void;
-  panTo: (position: LatLng) => void;
-}
-interface GBounds {
-  extend: (position: LatLng) => void;
-}
-interface GMarker {
-  setMap: (map: GMap | null) => void;
-  addListener: (event: string, handler: () => void) => void;
-  setIcon: (icon: unknown) => void;
-  setZIndex: (z: number) => void;
-}
-
-declare global {
-  interface Window {
-    google?: MapsGlobal;
-    __w2eMapsPromise?: Promise<void>;
-  }
-}
-
-/** Load the Maps JS API once per page, however many maps mount. */
-function loadMaps(apiKey: string): Promise<void> {
-  if (typeof window === "undefined") return Promise.resolve();
-  if (window.google?.maps) return Promise.resolve();
-  if (window.__w2eMapsPromise) return window.__w2eMapsPromise;
-
-  window.__w2eMapsPromise = new Promise<void>((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&loading=async&v=weekly`;
-    script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error("Google Maps failed to load"));
-    document.head.appendChild(script);
-  });
-
-  return window.__w2eMapsPromise;
 }
 
 function pin(color: string, scale: number, ring: string): Record<string, unknown> {
@@ -89,16 +46,21 @@ export function GoogleMapView({
   const container = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<GMap | null>(null);
   const markersRef = useRef<Map<string, GMarker>>(new Map());
-  const [failed, setFailed] = useState(false);
+  const [error, setError] = useState<{ message: string; hint: string } | null>(null);
 
-  // Build the map and its markers. Re-runs when the places themselves change.
+  // Labels only affect marker tooltips, so they are read through a ref rather
+  // than a dependency — a new labels object each render would otherwise tear
+  // down and rebuild the entire map.
+  const labelsRef = useRef(labels);
+  labelsRef.current = labels;
+
   useEffect(() => {
     let cancelled = false;
 
-    loadMaps(apiKey)
-      .then(() => {
-        if (cancelled || !container.current || !window.google) return;
-        const maps = window.google.maps;
+    loadMapsLibraries(apiKey)
+      .then((maps) => {
+        if (cancelled || !container.current) return;
+        const names = labelsRef.current;
 
         const map =
           mapRef.current ??
@@ -116,30 +78,36 @@ export function GoogleMapView({
 
         const bounds = new maps.LatLngBounds();
 
-        const a = new maps.Marker({
-          position: originA,
-          map,
-          title: `${labels.a} — starting point`,
-          icon: pin("#0f6a5f", 1.15, "#ffffff"),
-          zIndex: 30,
-        });
-        const b = new maps.Marker({
-          position: originB,
-          map,
-          title: `${labels.b} — starting point`,
-          icon: pin("#a1620d", 1.15, "#ffffff"),
-          zIndex: 30,
-        });
-        const mid = new maps.Marker({
-          position: midpoint,
-          map,
-          title: "Midpoint between you",
-          icon: pin("#7c3a68", 1, "#ffffff"),
-          zIndex: 25,
-        });
-        markersRef.current.set("__a", a);
-        markersRef.current.set("__b", b);
-        markersRef.current.set("__mid", mid);
+        markersRef.current.set(
+          "__a",
+          new maps.Marker({
+            position: originA,
+            map,
+            title: `${names.a} — starting point`,
+            icon: pin("#0f6a5f", 1.15, "#ffffff"),
+            zIndex: 30,
+          }),
+        );
+        markersRef.current.set(
+          "__b",
+          new maps.Marker({
+            position: originB,
+            map,
+            title: `${names.b} — starting point`,
+            icon: pin("#a1620d", 1.15, "#ffffff"),
+            zIndex: 30,
+          }),
+        );
+        markersRef.current.set(
+          "__mid",
+          new maps.Marker({
+            position: midpoint,
+            map,
+            title: "Midpoint between you",
+            icon: pin("#7c3a68", 1, "#ffffff"),
+            zIndex: 25,
+          }),
+        );
 
         bounds.extend(originA);
         bounds.extend(originB);
@@ -161,14 +129,26 @@ export function GoogleMapView({
         // Open framed on both origins and the midpoint (FR-5.3).
         map.fitBounds(bounds, 56);
       })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
+      .catch((cause: unknown) => {
+        if (cancelled) return;
+        console.error("[where2eat] Google Maps failed to load:", cause);
+        setError(
+          cause instanceof MapsLoadError && cause.isAuthFailure
+            ? {
+                message: "Google rejected the map key",
+                hint: "Check that this site is an allowed referrer for the browser key, that the Maps JavaScript API is enabled, and that billing is on for the project.",
+              }
+            : {
+                message: "The map could not load",
+                hint: "The list still has everything, including how far each place is from each of you.",
+              },
+        );
       });
 
     return () => {
       cancelled = true;
     };
-  }, [apiKey, originA, originB, midpoint, places, onSelect, labels]);
+  }, [apiKey, originA, originB, midpoint, places, onSelect]);
 
   // Reflect the current selection (FR-5.4).
   useEffect(() => {
@@ -176,7 +156,13 @@ export function GoogleMapView({
       const marker = markersRef.current.get(place.id);
       if (!marker) continue;
       const selected = place.id === selectedId;
-      marker.setIcon(pin(selected ? "#7c3a68" : "#ffffff", selected ? 1.05 : 0.7, selected ? "#ffffff" : "#7c3a68"));
+      marker.setIcon(
+        pin(
+          selected ? "#7c3a68" : "#ffffff",
+          selected ? 1.05 : 0.7,
+          selected ? "#ffffff" : "#7c3a68",
+        ),
+      );
       marker.setZIndex(selected ? 40 : 10);
     }
     if (selectedId) {
@@ -185,11 +171,11 @@ export function GoogleMapView({
     }
   }, [selectedId, places]);
 
-  if (failed) {
+  if (error) {
     return (
       <div className="empty">
-        <h2>The map could not load</h2>
-        <p>The list below has everything, including how far each place is from each of you.</p>
+        <h2>{error.message}</h2>
+        <p>{error.hint}</p>
       </div>
     );
   }
