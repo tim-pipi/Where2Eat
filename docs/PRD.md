@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Status** | Draft v1.0 |
-| **Last updated** | 2026-09-15 |
+| **Status** | Draft v1.1 |
+| **Last updated** | 2026-09-16 |
 | **Author** | tim-pipi |
 | **Target release** | V1 (MVP) |
 
@@ -13,9 +13,9 @@
 
 Where2Eat is a zero-signup web app that settles the question *"where should we meet to eat?"* for two people who are starting from different places.
 
-One person creates a session and gets a unique link. They send that link to the other person. Both enter their starting location. Where2Eat computes a fair meeting point between them and shows popular food places near it, ranked and filterable, with travel time from each person's origin shown side by side.
+One person creates a session and gets a unique link. They send that link to the other person. Both enter their starting location. Where2Eat computes a fair meeting point between them and shows popular food places near it on a map, ranked and filterable, with each person's distance from every option shown side by side.
 
-The entire experience is one link, two inputs, one shared result page.
+The entire experience is one link, two inputs, one shared result page. V1 assumes both people travel by public transport, so there is nothing to configure.
 
 ## 2. Problem
 
@@ -46,7 +46,7 @@ Deciding where to eat with someone who is starting from a different part of the 
 - User accounts, saved history, friends lists, or social features
 - Our own restaurant reviews, photos, or ratings (we lean entirely on a third-party places provider)
 - Native mobile apps
-- Multi-modal route planning beyond a single selected travel mode per user
+- Travel-mode choice — **V1 assumes both participants travel by public transport**, which keeps the fairness maths to a single mode
 
 ## 4. Users and use cases
 
@@ -62,7 +62,7 @@ Deciding where to eat with someone who is starting from a different part of the 
 |---|---|
 | UC1 | A creates a session, shares the link, B opens it; both enter locations and see the same result list |
 | UC2 | A wants to use their current GPS location instead of typing an address |
-| UC3 | B is arriving by train while A is driving — the midpoint should account for that |
+| UC3 | Both are travelling by public transport and want a spot neither has to trek to |
 | UC4 | The pair filters the list down (cuisine, price, open now) and lands on a single choice |
 | UC5 | A opens the link again an hour later and the session is still there |
 
@@ -100,7 +100,7 @@ Deciding where to eat with someone who is starting from a different part of the 
                                   ┌────────────────────────┐
                                   │  Shared results page   │
                                   │  Map + ranked list     │
-                                  │  Filters, travel times │
+                                  │  Filters, both origins │
                                   └────────────────────────┘
 ```
 
@@ -128,7 +128,7 @@ Deciding where to eat with someone who is starting from a different part of the 
 | FR-2.2 | "Use my current location" invokes the browser Geolocation API, with graceful fallback to manual entry if denied or unavailable | P0 |
 | FR-2.3 | The entered location is resolved to lat/lng and echoed back as a human-readable label for confirmation | P0 |
 | FR-2.4 | A participant can change their location after submitting; doing so recomputes the result for both participants | P0 |
-| FR-2.5 | Each participant selects a travel mode (driving / transit / walking / cycling), defaulting to driving | P1 |
+| FR-2.5 | Travel is assumed to be **public transport** for both participants. There is no travel-mode selector in V1 | P0 |
 | FR-2.6 | Input is validated: unresolvable addresses show an inline error, not a dead end | P0 |
 
 ### 6.3 Midpoint computation
@@ -137,54 +137,68 @@ Deciding where to eat with someone who is starting from a different part of the 
 |---|---|---|
 | FR-3.1 | With both locations present, compute a **meeting point** between them | P0 |
 | FR-3.2 | V1 baseline: geographic midpoint via great-circle interpolation (haversine) between the two coordinates | P0 |
-| FR-3.3 | V1.1 refinement: **travel-time-balanced midpoint** — search along the corridor between the two origins for the point minimising the absolute difference in travel time, subject to each person's selected mode | P1 |
+| FR-3.3 | V1.1 refinement: **transit-time-balanced midpoint** — search along the corridor between the two origins for the point minimising the absolute difference in public-transport travel time | P1 |
 | FR-3.4 | If the two locations are within ~1 km of each other, skip midpoint logic and search around their shared area, with an explanatory note | P1 |
 | FR-3.5 | If the two locations are implausibly far apart (> 150 km, configurable), warn that a midpoint may be meaningless and offer to search near either person instead | P1 |
 | FR-3.6 | If the raw midpoint falls somewhere with no food places (water, motorway, industrial zone), progressively widen the search radius and/or snap to the nearest viable dining cluster, and disclose that the point was adjusted | P1 |
 
-> **Design note.** The naive geographic midpoint is the honest V1: it is instant, cheap, and correct often enough. But it is wrong in exactly the cases users notice — one person on a motorway and the other on a slow bus route are not equidistant in any way they care about. FR-3.3 is what makes the product's fairness claim true, and it should ship close behind V1.
+> **Design note.** The naive geographic midpoint is the honest V1: it is instant, cheap, and correct often enough. But it is wrong in exactly the cases users notice — a point that sits on a direct train line for one person and needs two bus changes for the other is not fair in any way they care about. FR-3.3 is what makes the product's fairness claim true, and it should ship close behind V1. Assuming public transport for both participants (FR-2.5) is what keeps it tractable: one mode, one matrix, no combinatorial explosion of mode pairings.
 
 ### 6.4 Food place discovery
 
 | ID | Requirement | Priority |
 |---|---|---|
-| FR-4.1 | Fetch food places (restaurants, cafés, bars serving food) near the meeting point from a third-party places provider | P0 |
+| FR-4.1 | Fetch food places (restaurants, cafés, bars serving food) near the meeting point from the **Google Places API** | P0 |
 | FR-4.2 | Default search radius scales with the distance between the two origins (e.g. 10% of the separation, clamped to 500 m – 5 km) | P0 |
 | FR-4.3 | Return at least 10 and at most 30 results in the default view | P0 |
-| FR-4.4 | "Popular" ranking = a blended score of provider rating, rating count, distance from midpoint, and travel-time fairness. The weighting is configurable server-side | P0 |
+| FR-4.4 | "Popular" ranking = a blended score of Google rating, review count, and distance from the midpoint. The weighting is configurable server-side | P0 |
 | FR-4.5 | Each result shows: name, cuisine/category, rating + review count, price level, photo, distance, and open/closed status | P0 |
-| FR-4.6 | Each result shows **travel time from each participant** side by side, with a visual fairness indicator when the two are close | P1 |
+| FR-4.6 | Each result shows **distance from each participant** side by side, with a visual fairness indicator when the two are close. Transit travel time replaces distance once FR-3.3 lands | P0 |
 | FR-4.7 | Tapping a result opens a detail view: larger photos, address, phone, hours, and deep links to Google Maps / Apple Maps directions from each origin | P0 |
-| FR-4.8 | Attribution and linking requirements of the places provider are honoured on every surface that shows their data | P0 |
+| FR-4.8 | Google's attribution and linking requirements are honoured on every surface showing Places data, including the "powered by Google" mark and required attributions on photos | P0 |
 
-### 6.5 Filtering and sorting
-
-| ID | Requirement | Priority |
-|---|---|---|
-| FR-5.1 | Filters: cuisine/category, price level, minimum rating, open now | P0 |
-| FR-5.2 | Sort: recommended (default), rating, distance from midpoint, fairest travel split | P1 |
-| FR-5.3 | Filters are session-scoped and shared — a filter one person sets is visible to the other | P1 |
-| FR-5.4 | Filters that produce zero results show a clear empty state with a one-tap "relax filters" action | P0 |
-
-### 6.6 Shared, live session state
+### 6.5 Map view
 
 | ID | Requirement | Priority |
 |---|---|---|
-| FR-6.1 | Both participants see the same session state without a manual refresh; updates propagate within ~2 s | P0 |
-| FR-6.2 | Transport: server-sent events or WebSockets, with polling fallback (≤ 5 s interval) where those are unavailable | P0 |
-| FR-6.3 | The pre-result screen shows who has joined and whose location is still outstanding | P0 |
-| FR-6.4 | Either participant can shortlist / "heart" a place; shortlists are visible to both. When both heart the same place it is marked as a match | P1 |
-| FR-6.5 | The result page is re-openable and stable for the session's lifetime — same link, same results, unless an input changes | P0 |
+| FR-5.1 | The results page shows an interactive map alongside the list, displaying both participants' origins, the computed meeting point, and a marker for every result in view | P0 |
+| FR-5.2 | Markers are visually distinct by role: participant A, participant B, the meeting point, and food places each read differently at a glance | P0 |
+| FR-5.3 | The map opens framed to fit both origins and the meeting point, so the "why here?" question is answered before any interaction | P0 |
+| FR-5.4 | Selecting a place in the list highlights its marker, and selecting a marker scrolls the list to that place — one selection, reflected in both views | P0 |
+| FR-5.5 | The map is rendered with the **Google Maps JavaScript API**, as required when displaying Google Places data on a map | P0 |
+| FR-5.6 | On phone width, map and list share the screen via a toggle or a draggable sheet rather than stacking into two full-height panes | P0 |
+| FR-5.7 | The list view remains a complete alternative to the map for screen-reader and keyboard users — the map is never the only way to reach a result | P0 |
 
-### 6.7 Non-happy paths
+> **Design note.** The map is what makes the midpoint legible. A list alone asks the user to trust the arithmetic; a map showing two origins and a point between them makes the fairness argument visually, in the moment, without a word of explanation. It is the product's proof of work, which is why the framing in FR-5.3 is a P0 rather than a nicety.
+
+### 6.6 Filtering and sorting
 
 | ID | Requirement | Priority |
 |---|---|---|
-| FR-7.1 | Second participant never arrives → creator sees a persistent waiting state and can enter a second location themselves ("just show me places near a midpoint I pick") | P1 |
-| FR-7.2 | A third person opens the link → read-only spectator view, clearly labelled, with a "start your own" action | P1 |
-| FR-7.3 | Places provider errors or rate-limits → cached results if available, otherwise a retry-able error state; never a blank page | P0 |
-| FR-7.4 | Geolocation denied → the manual address field is already focused, with no dead end or nagging re-prompt | P0 |
-| FR-7.5 | Offline / connection lost → a reconnecting banner; state resyncs on reconnect | P1 |
+| FR-6.1 | Filters: cuisine/category, price level, minimum rating, open now | P0 |
+| FR-6.2 | Sort: recommended (default), rating, distance from midpoint, fairest travel split | P1 |
+| FR-6.3 | Filters are session-scoped and shared — a filter one person sets is visible to the other | P1 |
+| FR-6.4 | Filters that produce zero results show a clear empty state with a one-tap "relax filters" action | P0 |
+
+### 6.7 Shared, live session state
+
+| ID | Requirement | Priority |
+|---|---|---|
+| FR-7.1 | Both participants see the same session state without a manual refresh; updates propagate within ~2 s | P0 |
+| FR-7.2 | Transport: server-sent events or WebSockets, with polling fallback (≤ 5 s interval) where those are unavailable | P0 |
+| FR-7.3 | The pre-result screen shows who has joined and whose location is still outstanding | P0 |
+| FR-7.4 | Either participant can shortlist / "heart" a place; shortlists are visible to both. When both heart the same place it is marked as a match | P1 |
+| FR-7.5 | The result page is re-openable and stable for the session's lifetime — same link, same results, unless an input changes | P0 |
+
+### 6.8 Non-happy paths
+
+| ID | Requirement | Priority |
+|---|---|---|
+| FR-8.1 | Second participant never arrives → creator sees a persistent waiting state and can enter a second location themselves ("just show me places near a midpoint I pick") | P1 |
+| FR-8.2 | A third person opens the link → read-only spectator view, clearly labelled, with a "start your own" action | P1 |
+| FR-8.3 | Places provider errors or rate-limits → cached results if available, otherwise a retry-able error state; never a blank page | P0 |
+| FR-8.4 | Geolocation denied → the manual address field is already focused, with no dead end or nagging re-prompt | P0 |
+| FR-8.5 | Offline / connection lost → a reconnecting banner; state resyncs on reconnect | P1 |
 
 ## 7. Non-functional requirements
 
@@ -243,20 +257,19 @@ Starting locations are frequently home or workplace addresses. This is the most 
 
 ### 9.2 Third-party dependencies
 
-| Need | Candidate | Notes |
+| Need | Choice | Notes |
 |---|---|---|
-| Place search, details, photos, ratings | Google Places API | Best coverage and rating density; strictest attribution/caching terms; highest cost |
-| " (alternative) | Foursquare Places | Cheaper, more permissive caching, thinner ratings in some markets |
-| Travel times | Google Routes / Distance Matrix, or Mapbox Matrix | Needed for FR-3.3 and FR-4.6; transit coverage varies by city |
-| Address autocomplete | Same provider as place search, to keep session tokens and billing coherent | |
-| Map rendering | Mapbox GL / MapLibre, or the provider's own SDK | |
+| Place search, details, photos, ratings | **Google Places API (New)** | Best coverage and rating density. Server-side only, so the key is never exposed to the client |
+| Map rendering | **Google Maps JavaScript API** | Not a free choice: Google's terms require Places data shown on a map to be shown on a Google map. Browser key, restricted by HTTP referrer |
+| Geocoding + address autocomplete | **Google Geocoding + Places Autocomplete** | Same provider keeps session tokens and billing coherent |
+| Transit travel times (FR-3.3) | **Google Routes API**, `TRANSIT` mode | Deferred to M3. Transit coverage varies sharply by city — a launch-market gate (O-3) |
 
-> **Decision needed (O-1).** Provider choice materially affects unit cost, caching freedom, and the quality of the "popular" signal. Recommend prototyping place quality in two target cities before committing.
+> **Decision made (O-1).** Google, for coverage and rating density, and because the map requirement (FR-5.5) follows from it anyway. The cost consequence is real and is why §9.3 exists: Google is the most expensive option in this category, so caching is a launch requirement rather than an optimisation.
 
 ### 9.3 Caching and cost control
 
 - Cache place-search responses keyed by (geohash precision ~6, radius bucket, filter set) with a TTL that respects the provider's terms.
-- Cache travel-time matrices keyed by rounded origin/destination pairs and mode.
+- Cache transit travel-time matrices keyed by rounded origin/destination pairs (one mode only, so the key space stays small).
 - Debounce autocomplete; use provider session tokens where they reduce billing.
 - Compute the midpoint server-side once per input change, not per client render.
 - Hard per-IP rate limits on session creation to blunt scripted abuse of paid APIs.
@@ -268,7 +281,7 @@ Session        id, slug, created_at, expires_at, status,
                midpoint_lat, midpoint_lng, midpoint_method, filters_json
 
 Participant    id, session_id, token_hash, seat (A|B),
-               lat, lng, area_label, travel_mode, joined_at
+               lat, lng, area_label, joined_at
 
 Shortlist      session_id, participant_id, place_id, created_at
 
@@ -297,7 +310,7 @@ ResultCache    cache_key, payload_json, fetched_at, expires_at
 
 - Sessions abandoned at the waiting state (B never joins) — should fall over time
 - Zero-result searches per completed session — should be near zero
-- Median absolute travel-time difference between the two participants for the chosen place — the fairness claim, measured
+- Median absolute difference in distance (and, from M3, transit time) between the two participants for the chosen place — the fairness claim, measured
 
 ## 11. Out of scope for V1 / future
 
@@ -314,10 +327,10 @@ ResultCache    cache_key, payload_json, fetched_at, expires_at
 | Risk | Impact | Likelihood | Mitigation |
 |---|---|---|---|
 | Places API cost scales faster than usage value | High | Medium | Aggressive caching, rate limits, cost-per-session as a tracked metric from day one, evaluate cheaper providers early |
-| The geographic midpoint feels unfair in real cities | High | High | Ship FR-3.3 (travel-time balancing) close behind V1; always show both travel times so the user can judge |
+| The geographic midpoint feels unfair in real cities | High | High | Ship FR-3.3 (transit-time balancing) in M3; meanwhile always show both distances and the map, so the user can judge the split themselves |
 | Midpoint lands somewhere with no restaurants | Medium | Medium | FR-3.6 radius widening + snap-to-cluster, with disclosure |
-| Second participant never opens the link | High | Medium | FR-7.1 single-player fallback; optimise the share step; measure join rate as a primary funnel metric |
-| Provider terms restrict caching or display | Medium | Medium | Confirm terms before provider commitment; design the cache layer with per-provider TTL policy |
+| Second participant never opens the link | High | Medium | FR-8.1 single-player fallback; optimise the share step; measure join rate as a primary funnel metric |
+| Google's terms restrict caching or display | Medium | Medium | Places data is shown on a Google map (FR-5.5) and attributed (FR-4.8); cache TTLs set to what the terms permit |
 | Privacy perception ("this app wants my home address") | Medium | Medium | In-line plain-language disclosure (PR-6), visible deletion promise, approximate-area display (PR-3) |
 | Thin place coverage outside major metros | Medium | Medium | Launch city-by-city; detect low-coverage areas and say so rather than showing three bad options |
 | Unguessable-link model is the only access control | Medium | Low | High-entropy slugs, `noindex`, no enumeration, short TTL, seat-locking after 2 participants |
@@ -326,21 +339,21 @@ ResultCache    cache_key, payload_json, fetched_at, expires_at
 
 | ID | Question | Owner | Needed by |
 |---|---|---|---|
-| O-1 | Which places provider? Cost, coverage, and caching terms need a head-to-head in two target cities | Eng + Product | Before build starts |
-| O-2 | Does V1 ship with geographic midpoint only, or hold for travel-time balancing? | Product | Scoping |
-| O-3 | Which launch market(s)? Coverage quality and transit-data availability vary sharply | Product | Before build starts |
+| O-1 | ~~Which places provider?~~ **Resolved: Google.** Remaining: what monthly API budget caps the launch | Eng + Product | Before launch |
+| O-2 | ~~Geographic midpoint or travel-time balancing for V1?~~ **Resolved: geographic midpoint in V1**, transit balancing in M3 | Product | Resolved |
+| O-3 | Which launch market? Google transit coverage quality is now a gating factor for M3, not just a nicety | Product | Before M3 |
 | O-4 | Is the approximate-area-only display (PR-3) the right privacy/transparency trade-off? | Product + Design | User testing |
-| O-5 | Is shortlisting (FR-6.4) V1 or V2? It is what turns a list into a decision, but adds real-time write complexity | Product | Scoping |
+| O-5 | Is shortlisting (FR-7.4) V1 or V2? It is what turns a list into a decision, but adds real-time write complexity | Product | Scoping |
 | O-6 | Monetisation direction — none at launch, but affiliate/booking links vs. sponsored placement affects ranking-integrity decisions later | Product | Post-launch |
 
 ## 14. Release plan
 
 | Milestone | Contents |
 |---|---|
-| **M1 — Walking skeleton** | Session create, unique link, two-seat join, geographic midpoint, place search, static list. Internal only. |
-| **M2 — V1 / MVP** | Full P0 set: live shared state, filters, detail view, directions deep links, privacy disclosures, error states. Limited public launch in one city. |
-| **M3 — Fairness** | Travel-time-balanced midpoint (FR-3.3), per-participant travel times (FR-4.6), fairness sort, travel modes. |
-| **M4 — Decision tools** | Shortlisting and mutual matches (FR-6.4), shared filters, single-player fallback (FR-7.1). |
+| **M1 — Walking skeleton** | Session create, unique link, two-seat join, geographic midpoint, Google Places search, map + list. Internal only. |
+| **M2 — V1 / MVP** | Full P0 set: live shared state, map view, filters, detail view, directions deep links, privacy disclosures, error states. Limited public launch in one city. |
+| **M3 — Fairness** | Transit-time-balanced midpoint (FR-3.3), per-participant transit times replacing distance in FR-4.6, fairness sort. |
+| **M4 — Decision tools** | Shortlisting and mutual matches (FR-7.4), shared filters, single-player fallback (FR-8.1). |
 
 ---
 
@@ -352,5 +365,5 @@ ResultCache    cache_key, payload_json, fetched_at, expires_at
 | **Participant / seat** | One of the two people in a session (seat A = creator, seat B = joiner) |
 | **Meeting point / midpoint** | The computed location the food search is centred on |
 | **Separation** | Great-circle distance between the two starting locations |
-| **Fairness** | The absolute difference in travel time between the two participants and a candidate place |
+| **Fairness** | The absolute difference between the two participants in reaching a candidate place — straight-line distance in V1, public-transport travel time from M3 |
 | **Completed session** | Both locations submitted and results viewed by at least one participant |
